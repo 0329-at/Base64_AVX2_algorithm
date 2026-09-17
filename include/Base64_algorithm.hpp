@@ -169,7 +169,7 @@ public:
         return true;
     }
 
-    constexpr std::string decode(std::string_view input) const {
+    constexpr std::string decode(std::string_view input) {
         const std::size_t n = input.size();
         if (n == 0) return {};
 
@@ -264,7 +264,7 @@ public:
 
 private:
     // ---- 校验，失败抛 DecodeError ----
-    constexpr void check_or_throw(std::string_view input) const {
+    constexpr void check_or_throw(std::string_view input) {
         const std::size_t n = input.size();
         if (n == 0) return;
 
@@ -343,10 +343,10 @@ private:
         }
     }
 
-    static std::string char_repr(char c) {
+    static constexpr std::string char_repr(char c) {
         unsigned char uc = (unsigned char)c;
         if (uc >= 0x20 && uc < 0x7f && uc != '\\') return std::string(1, c);
-        static const char* hex = "0123456789abcdef";
+        constexpr const char* hex = "0123456789abcdef";
         std::string r = "\\x";
         r += hex[uc >> 4];
         r += hex[uc & 0xF];
