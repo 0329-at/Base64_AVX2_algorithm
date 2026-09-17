@@ -92,7 +92,7 @@ Decodes Base64. **Validates internally**. On invalid input, throws `base64_avx2:
 ### `validate`
 
 ```cpp
-bool validate(std::string_view input) const noexcept;
+bool validate(std::string_view input) noexcept;
 ```
 
 Returns `true` if `input` is well-formed Base64. **Does not throw.** Use when you want to branch on validity without exceptions:
