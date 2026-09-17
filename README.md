@@ -67,13 +67,6 @@ base64_avx2::Base64 b64;                             // standard mode (default)
 base64_avx2::Base64 b64{base64_avx2::Mode::UrlSafe}; // URL-safe mode
 ```
 
-### `set` / `mode`
-
-```cpp
-void set(Mode m) noexcept;
-Mode mode() noexcept;
-```
-
 Switch the alphabet at runtime:
 
 ```cpp
