@@ -16,7 +16,7 @@ target("test03")
     set_kind("binary")
 
     -- 被测头文件所在目录
-    add_includedirs("src", "tests/common")
+    add_includedirs("include", "tests/common")
 
     -- 所有测试源文件
     add_files("src/main.cpp")
