@@ -3,38 +3,35 @@
 #include <gtest/gtest.h>
 
 namespace {
-struct KnownVector {
-    const char* in;
-    const char* out;
-};
+struct KnownVector { const char* in; const char* out; };
 
 class KnownVectors : public ::testing::TestWithParam<KnownVector> {};
 
 TEST_P(KnownVectors, EncodeMatchesRfc) {
-    const auto& v = GetParam();
-    EXPECT_EQ(base64_avx2::encode(v.in), v.out);
+    base64_avx2::Base64 b64;
+    EXPECT_EQ(b64.encode(GetParam().in), GetParam().out);
+}
+
+TEST_P(KnownVectors, ValidateAcceptsRfc) {
+    base64_avx2::Base64 b64;
+    EXPECT_TRUE(b64.validate(GetParam().out));
 }
 
 TEST_P(KnownVectors, DecodeMatchesRfc) {
-    const auto& v = GetParam();
-    EXPECT_EQ(base64_avx2::decode_checked(v.out), v.in);
-}
-
-TEST_P(KnownVectors, ValidateAcceptsRfcVector) {
-    const auto& v = GetParam();
-    EXPECT_TRUE(base64_avx2::validate(v.out));
+    base64_avx2::Base64 b64;
+    EXPECT_EQ(b64.decode(GetParam().out), GetParam().in);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Rfc4648, KnownVectors,
     ::testing::Values(
-        KnownVector{"",       ""       },
-        KnownVector{"f",      "Zg=="   },
-        KnownVector{"fo",     "Zm8="   },
-        KnownVector{"foo",    "Zm9v"   },
-        KnownVector{"foob",   "Zm9vYg==" },
-        KnownVector{"fooba",  "Zm9vYmE=" },
-        KnownVector{"foobar", "Zm9vYmFy" }
+        KnownVector{"",       ""        },
+        KnownVector{"f",      "Zg=="    },
+        KnownVector{"fo",     "Zm8="    },
+        KnownVector{"foo",    "Zm9v"    },
+        KnownVector{"foob",   "Zm9vYg=="},
+        KnownVector{"fooba",  "Zm9vYmE="},
+        KnownVector{"foobar", "Zm9vYmFy"}
     )
 );
 } // namespace

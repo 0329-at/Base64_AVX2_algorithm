@@ -3,19 +3,16 @@
 #include <gtest/gtest.h>
 #include <random>
 
+using base64_avx2::Base64;
+
 TEST(Roundtrip, AllLengthsUpTo1024) {
     std::mt19937 rng(12345);
+    Base64 b64;
     for (std::size_t len = 0; len <= 1024; ++len) {
         const std::string data = test_util::random_string(rng, len);
-        const std::string enc = base64_avx2::encode(data);
+        const std::string enc = b64.encode(data);
 
-        ASSERT_TRUE(base64_avx2::validate(enc))
-            << "encode produced invalid base64 at len " << len;
-
-        EXPECT_EQ(base64_avx2::decode_checked(enc), data)
-            << "roundtrip mismatch at len " << len;
-
-        EXPECT_EQ(base64_avx2::decode(enc), base64_avx2::decode_checked(enc))
-            << "decode vs decode_checked at len " << len;
+        ASSERT_TRUE(b64.validate(enc)) << "len=" << len;
+        EXPECT_EQ(b64.decode(enc), data) << "len=" << len;
     }
 }

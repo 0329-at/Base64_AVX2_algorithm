@@ -1,26 +1,25 @@
 #include "Base64_algorithm.hpp"
 #include <gtest/gtest.h>
 
+using base64_avx2::Base64;
+
 namespace {
-struct LengthCase {
-    const char* in;
-    std::size_t expect;
-};
+struct LengthCase { const char* in; std::size_t expect; };
 
 class DecodeLength : public ::testing::TestWithParam<LengthCase> {};
 
 TEST_P(DecodeLength, OutputSizeMatches) {
-    const auto& c = GetParam();
-    ASSERT_TRUE(base64_avx2::validate(c.in));
-    EXPECT_EQ(base64_avx2::decode(c.in).size(), c.expect);
+    Base64 b64;
+    ASSERT_TRUE(b64.validate(GetParam().in));
+    EXPECT_EQ(b64.decode(GetParam().in).size(), GetParam().expect);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Various, DecodeLength,
     ::testing::Values(
-        LengthCase{"Zg==", 1},
-        LengthCase{"Zm8=", 2},
-        LengthCase{"Zm9v", 3},
+        LengthCase{"Zg==",     1},
+        LengthCase{"Zm8=",     2},
+        LengthCase{"Zm9v",     3},
         LengthCase{"Zm9vYg==", 4},
         LengthCase{"Zm9vYmE=", 5},
         LengthCase{"Zm9vYmFy", 6},

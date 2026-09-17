@@ -5,10 +5,19 @@
 
 namespace ref {
 
-inline constexpr std::string_view kChars =
+inline constexpr std::string_view kStdChars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+inline constexpr std::string_view kUrlChars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-inline std::string encode(std::string_view in) {
+enum class Alphabet { Standard, UrlSafe };
+
+inline const std::string_view& chars(Alphabet a) {
+    return a == Alphabet::Standard ? kStdChars : kUrlChars;
+}
+
+inline std::string encode(std::string_view in, Alphabet a = Alphabet::Standard) {
+    const auto& tbl = chars(a);
     std::string out;
     out.reserve((in.size() + 2) / 3 * 4);
     const std::size_t n = in.size();
@@ -20,25 +29,27 @@ inline std::string encode(std::string_view in) {
             ++bytes;
         }
         t <<= (3 - bytes) * 8;
-        for (int s = 18; s >= 0; s -= 6)
-            out += kChars[(t >> s) & 0x3F];
+        for (int s = 18; s >= 0; s -= 6) out += tbl[(t >> s) & 0x3F];
         if (bytes == 1) { out[out.size() - 1] = '='; out[out.size() - 2] = '='; }
         else if (bytes == 2) { out[out.size() - 1] = '='; }
     }
     return out;
 }
 
-inline bool decode(std::string_view in, std::string& out) {
+inline bool decode(std::string_view in, std::string& out, Alphabet a = Alphabet::Standard) {
     out.clear();
     if (in.empty()) return true;
     if ((in.size() % 4) != 0) return false;
 
-    auto val = [](unsigned char c) -> int {
+    const char c62 = (a == Alphabet::Standard) ? '+' : '-';
+    const char c63 = (a == Alphabet::Standard) ? '/' : '_';
+
+    auto val = [&](unsigned char c) -> int {
         if (c >= 'A' && c <= 'Z') return c - 'A';
         if (c >= 'a' && c <= 'z') return c - 'a' + 26;
         if (c >= '0' && c <= '9') return c - '0' + 52;
-        if (c == '+') return 62;
-        if (c == '/') return 63;
+        if (c == (unsigned char)c62) return 62;
+        if (c == (unsigned char)c63) return 63;
         return -1;
     };
 

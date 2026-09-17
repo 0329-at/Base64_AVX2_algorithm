@@ -2,6 +2,8 @@
 #include "ref_base64.hpp"
 #include <gtest/gtest.h>
 
+using base64_avx2::Base64;
+
 namespace {
 class PaddingPosition : public ::testing::TestWithParam<std::size_t> {};
 
@@ -10,10 +12,11 @@ TEST_P(PaddingPosition, MatchesRefAndRoundtrips) {
     std::string data(len, '\0');
     for (std::size_t i = 0; i < len; ++i) data[i] = (char)(i * 7 + 1);
 
-    const std::string enc = base64_avx2::encode(data);
+    Base64 b64;
+    const std::string enc = b64.encode(data);
     ASSERT_EQ(enc, ref::encode(data)) << "len=" << len;
-    ASSERT_TRUE(base64_avx2::validate(enc)) << "len=" << len;
-    EXPECT_EQ(base64_avx2::decode(enc), data) << "len=" << len;
+    ASSERT_TRUE(b64.validate(enc)) << "len=" << len;
+    EXPECT_EQ(b64.decode(enc), data) << "len=" << len;
 }
 
 INSTANTIATE_TEST_SUITE_P(

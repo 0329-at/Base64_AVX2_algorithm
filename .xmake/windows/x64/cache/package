@@ -1,0 +1,28 @@
+{
+    gtest = {
+        sysincludedirs = [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\include]],
+        libfiles = {
+            [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib\gmock.lib]],
+            [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib\gtest.lib]],
+            [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib\gmock_main.lib]],
+            [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib\gtest_main.lib]]
+        },
+        installdir = [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b]],
+        envs = {
+            PATH = {
+                [[C:\Users\30655\AppData\Local\.xmake\packages\n\ninja\v1.13.2\388143d312d14320a9c5240d43405107\bin]],
+                [[C:\Users\30655\AppData\Local\.xmake\packages\c\cmake\4.3.4\0f8cea59944043e09419f613dd6acd4d\bin]]
+            }
+        },
+        __enabled = true,
+        version = "v1.17.0",
+        linkdirs = [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib]],
+        static = true,
+        __requirestr = "gtest 1.17.0",
+        links = {
+            "gmock",
+            "gtest"
+        },
+        license = "BSD-3"
+    }
+}

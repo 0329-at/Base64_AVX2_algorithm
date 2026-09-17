@@ -1,0 +1,110 @@
+{
+    ["find_program_clang-cl_arch_x64_plat_windows_checktoolcxx"] = {
+        ["clang-cl"] = [[C:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\Llvm\x64\bin\clang-cl]]
+    },
+    find_program_fetch_package_system = {
+        cmake = [[D:\CMAke\bin\cmake]],
+        ninja = [[E:\ninja-win\ninja.exe]]
+    },
+    find_package_windows_x64_fetch_package_xmake = {
+        ["xmake::gtest_a14402329573418185bf52f17f8d405b_release_v1.17.0_external"] = {
+            version = "v1.17.0",
+            license = "BSD-3",
+            linkdirs = {
+                [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib]]
+            },
+            libfiles = {
+                [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib\gmock.lib]],
+                [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib\gtest.lib]],
+                [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib\gmock_main.lib]],
+                [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\lib\gtest_main.lib]]
+            },
+            static = true,
+            links = {
+                "gmock",
+                "gtest"
+            },
+            sysincludedirs = {
+                [[C:\Users\30655\AppData\Local\.xmake\packages\g\gtest\v1.17.0\a14402329573418185bf52f17f8d405b\include]]
+            }
+        }
+    },
+    ["find_program_clang-cl_arch_x64_plat_windows_checktoolld"] = {
+        ["link.exe"] = [[C:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\bin\HostX64\x64\link.exe]]
+    },
+    ["lib.detect.has_flags"] = {
+        ["windows_x64_c:\\program files\\microsoft visual studio\\18\\professional\\vc\\tools\\llvm\\x64\\bin\\clang-cl.exe__cxx_cxflags_--target=x86_64-pc-windows-msvc_-march=native"] = true,
+        ["windows_x64_c:\\program files\\microsoft visual studio\\18\\professional\\vc\\tools\\llvm\\x64\\bin\\clang-cl.exe__cxx_cxflags_--target=x86_64-pc-windows-msvc_cl_external_includedir"] = true,
+        ["windows_x64_c:\\program files\\microsoft visual studio\\18\\professional\\vc\\tools\\llvm\\x64\\bin\\clang-cl.exe__cxx__--target=x86_64-pc-windows-msvc_-O2"] = true,
+        ["windows_x64_c:\\program files\\microsoft visual studio\\18\\professional\\vc\\tools\\llvm\\x64\\bin\\clang-cl.exe__cxx_cxflags_--target=x86_64-pc-windows-msvc_-fcolor-diagnostics"] = true,
+        ["windows_x64_c:\\program files\\microsoft visual studio\\18\\professional\\vc\\tools\\llvm\\x64\\bin\\clang-cl.exe__cxx_cxflags_--target=x86_64-pc-windows-msvc_-DNDEBUG"] = true,
+        ["windows_x64_c:\\program files\\microsoft visual studio\\18\\professional\\vc\\tools\\llvm\\x64\\bin\\clang-cl.exe__cxx_cxflags_--target=x86_64-pc-windows-msvc_clang_mmd"] = true,
+        ["windows_x64_c:\\program files\\microsoft visual studio\\18\\professional\\vc\\tools\\llvm\\x64\\bin\\clang-cl.exe__cxx_cxflags_--target=x86_64-pc-windows-msvc_-fansi-escape-codes"] = true,
+        ["windows_x64_c:\\program files\\microsoft visual studio\\18\\professional\\vc\\tools\\llvm\\x64\\bin\\clang-cl.exe__cxx_cxflags_--target=x86_64-pc-windows-msvc_-std:c++20"] = true
+    },
+    find_program_fetch_package_xmake = {
+        cmake = false,
+        ninja = false
+    },
+    find_programver = {
+        ["E:\\zig-x86_64-windows-0.17.0-dev.56+a8226cd53\\zig.exe"] = "0.17.0-dev.56+a8226cd53",
+        ["C:\\Program Files\\dotnet\\dotnet.exe"] = "10.0.401"
+    },
+    find_program = {
+        gzip = false,
+        ["C:\\Program Files\\Microsoft Visual Studio\\18\\Professional\\VC\\Tools\\Llvm\\x64\\bin\\clang-cl"] = [[c:\program files\microsoft visual studio\18\professional\vc\tools\llvm\x64\bin\clang-cl.exe]],
+        ["clang-cl.exe"] = [[C:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\Llvm\x64\bin\clang-cl.exe]],
+        dotnet = [[C:\Program Files\dotnet\dotnet.exe]],
+        nim = false,
+        ["cl.exe"] = [[C:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\bin\HostX64\x64\cl.exe]],
+        curl = [[D:\xmake\winenv\bin\curl]],
+        git = [[C:\Program Files\Git\cmd\git.exe]],
+        zig = [[E:\zig-x86_64-windows-0.17.0-dev.56+a8226cd53\zig.exe]],
+        ["7z"] = [[D:\xmake\winenv\bin\7z]]
+    },
+    ["find_program_clang-cl_arch_x64_plat_windows_checktoolcc"] = {
+        ["clang-cl"] = [[C:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\Llvm\x64\bin\clang-cl]]
+    },
+    find_programver_fetch_package_system = {
+        ["D:\\CMAke\\bin\\cmake"] = "4.4.0",
+        ["E:\\ninja-win\\ninja.exe"] = "1.13.1"
+    },
+    ["detect.sdks.find_dotnet"] = {
+        dotnet = {
+            version = "10.0.401",
+            sdks = {
+                {
+                    version = "10.0.401",
+                    directory = [[C:\Program Files\dotnet\sdk\10.0.401]]
+                }
+            },
+            runtimes = {
+                {
+                    version = "10.0.12",
+                    name = "Microsoft.AspNetCore.App"
+                },
+                {
+                    version = "3.1.32",
+                    name = "Microsoft.NETCore.App"
+                },
+                {
+                    version = "10.0.12",
+                    name = "Microsoft.NETCore.App"
+                },
+                {
+                    version = "10.0.12",
+                    name = "Microsoft.WindowsDesktop.App"
+                }
+            },
+            sdkver = "10.0.401",
+            bindir = [[C:\Program Files\dotnet]],
+            sdkdir = [[C:\Program Files\dotnet\sdk\10.0.401]],
+            netfxsdk = {
+                includedir = [[C:\Program Files (x86)\Windows Kits\NETFXSDK\4.8\Include]],
+                sdkver = "4.8",
+                sdkdir = [[C:\Program Files (x86)\Windows Kits\NETFXSDK]],
+                libdir = [[C:\Program Files (x86)\Windows Kits\NETFXSDK\4.8\Lib]]
+            }
+        }
+    }
+}

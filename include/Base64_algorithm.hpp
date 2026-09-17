@@ -8,128 +8,396 @@
 #include <string_view>
 
 #if defined(__GNUC__) || defined(__clang__)
-    #define B64_FORCE_INLINE __attribute__((always_inline)) inline
+    #define BASE64_AVX2_FORCE_INLINE __attribute__((always_inline)) inline
 #elif defined(_MSC_VER)
-    #define B64_FORCE_INLINE __forceinline
+    #define BASE64_AVX2_FORCE_INLINE __forceinline
 #else
-    #define B64_FORCE_INLINE inline
+    #define BASE64_AVX2_FORCE_INLINE inline
 #endif
+
+#define BASE64_AVX2_VERSION_MAJOR 0
+#define BASE64_AVX2_VERSION_MINOR 3
+#define BASE64_AVX2_VERSION_PATCH 0
 
 namespace base64_avx2 {
 
-namespace detail {
+enum class Mode {
+    Standard,   // A-Z a-z 0-9 + /
+    UrlSafe,    // A-Z a-z 0-9 - _
+};
 
-constexpr std::array<char, 64> enc_table = [] {
-    std::array<char, 64> t{};
-    constexpr const char* s =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    for (int i = 0; i < 64; ++i) t[i] = s[i];
-    return t;
-}();
+class DecodeError : public std::invalid_argument {
+public:
+    DecodeError(std::string msg, std::size_t position)
+        : std::invalid_argument(std::move(msg))
+        , position_(position) {}
 
-B64_FORCE_INLINE int decode_char(unsigned char c) noexcept {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return 0;   
-}
+    constexpr std::size_t position() const noexcept { return position_; }
 
-} // namespace detail
+private:
+    std::size_t position_;
+};
 
-constexpr inline bool validate(std::string_view input) noexcept {
-    const std::size_t n = input.size();
+class Base64 {
+public:
+    constexpr Base64() noexcept = default;
+    explicit constexpr Base64(Mode m) noexcept : mode_(m) {}
 
-    if (n == 0) {
-        return true;             
-    }
+    void set(Mode m) noexcept { mode_ = m; }
+    Mode mode() const noexcept { return mode_; }
 
-    if ((n & 3) != 0) {
-        return false;
-    }
+    constexpr std::string encode(std::string_view input) {
+        const std::size_t n = input.size();
+        if (n == 0) return {};
 
-    std::size_t data_len = n;
-    if (input[n - 1] == '=') {
-        --data_len;
-        if (input[n - 2] == '=') {
-            --data_len;
-            if (n >= 3 && input[n - 3] == '=') return false;
+        std::string out((n + 2) / 3 * 4, '\0');
+        const std::uint8_t* __restrict src = (const std::uint8_t*)input.data();
+        std::uint8_t* __restrict dst       = (std::uint8_t*)out.data();
+
+        const char* table = (mode_ == Mode::Standard) ? kStdChars : kUrlChars;
+        const int fix62 = (int)(unsigned char)c62(mode_) - 58;
+        const int fix63 = (int)(unsigned char)c63(mode_) - 59;
+
+        std::size_t pos = 0, dpos = 0;
+
+        if (n >= 24) {
+            while (pos + 48 <= n) {
+                _mm_prefetch((const char*)(src + pos + 512), _MM_HINT_T0);
+                encode_block(src + pos,      dst + dpos,      fix62, fix63);
+                encode_block(src + pos + 24, dst + dpos + 32, fix62, fix63);
+                pos  += 48;
+                dpos += 64;
+            }
+            while (pos + 24 <= n) {
+                encode_block(src + pos, dst + dpos, fix62, fix63);
+                pos  += 24;
+                dpos += 32;
+            }
+            const std::size_t rem = n - pos;
+            if (rem > 0) {
+                alignas(32) std::uint8_t tmp[24] = {};
+                std::memcpy(tmp, src + pos, rem);
+                alignas(32) std::uint8_t tmp_out[32];
+                encode_block(tmp, tmp_out, fix62, fix63);
+                const std::size_t tail_len = (rem + 2) / 3 * 4;
+                if (rem % 3 == 1) {
+                    tmp_out[tail_len - 2] = '=';
+                    tmp_out[tail_len - 1] = '=';
+                } else if (rem % 3 == 2) {
+                    tmp_out[tail_len - 1] = '=';
+                }
+                std::memcpy(dst + dpos, tmp_out, tail_len);
+            }
+        } else {
+            while (pos < n) {
+                const std::size_t rem = n - pos;
+                std::uint32_t t = 0;
+                if (rem >= 1) t |= (std::uint32_t)src[pos]     << 16;
+                if (rem >= 2) t |= (std::uint32_t)src[pos + 1] <<  8;
+                if (rem >= 3) t |= (std::uint32_t)src[pos + 2];
+                dst[dpos + 0] = (std::uint8_t)table[(t >> 18) & 0x3F];
+                dst[dpos + 1] = (std::uint8_t)table[(t >> 12) & 0x3F];
+                dst[dpos + 2] = (rem >= 2) ? (std::uint8_t)table[(t >> 6) & 0x3F] : '=';
+                dst[dpos + 3] = (rem >= 3) ? (std::uint8_t)table[t & 0x3F]        : '=';
+                dpos += 4;
+                pos  += (rem >= 3) ? 3 : rem;
+            }
         }
+        return out;
     }
 
-    const std::uint8_t* src = (const std::uint8_t*)input.data();
-    std::size_t i = 0;
+    // ---- 校验（不抛异常）----
+    constexpr bool validate(std::string_view input) noexcept {
+        const std::size_t n = input.size();
+        if (n == 0) return true;
+        if (n % 4 != 0) return false;
 
-    if (data_len >= 32) {
-        const __m256i vA_1 = _mm256_set1_epi8('A' - 1);
-        const __m256i vZ_1 = _mm256_set1_epi8('Z' + 1);
+        int pad = 0;
+        if (input[n - 1] == '=') {
+            pad = 1;
+            if (n >= 2 && input[n - 2] == '=') {
+                pad = 2;
+                if (n >= 3 && input[n - 3] == '=') return false;
+            }
+        }
+        const std::size_t data_len = n - (std::size_t)pad;
+
+        for (std::size_t i = 0; i < data_len; ++i) {
+            if (input[i] == '=') return false;
+        }
+
+        const std::uint8_t* src = (const std::uint8_t*)input.data();
+        std::size_t i = 0;
+        if (data_len >= 32) {
+            const __m256i vA_1 = _mm256_set1_epi8('A' - 1);
+            const __m256i vZ_1 = _mm256_set1_epi8('Z' + 1);
+            const __m256i va_1 = _mm256_set1_epi8('a' - 1);
+            const __m256i vz_1 = _mm256_set1_epi8('z' + 1);
+            const __m256i v0_1 = _mm256_set1_epi8('0' - 1);
+            const __m256i v9_1 = _mm256_set1_epi8('9' + 1);
+            const __m256i vPlus  = _mm256_set1_epi8(c62(mode_));
+            const __m256i vSlash = _mm256_set1_epi8(c63(mode_));
+
+            while (i + 32 <= data_len) {
+                __m256i c = _mm256_loadu_si256((const __m256i*)(src + i));
+                __m256i m_upper = _mm256_and_si256(
+                    _mm256_cmpgt_epi8(c, vA_1), _mm256_cmpgt_epi8(vZ_1, c));
+                __m256i m_lower = _mm256_and_si256(
+                    _mm256_cmpgt_epi8(c, va_1), _mm256_cmpgt_epi8(vz_1, c));
+                __m256i m_digit = _mm256_and_si256(
+                    _mm256_cmpgt_epi8(c, v0_1), _mm256_cmpgt_epi8(v9_1, c));
+                __m256i m_plus  = _mm256_cmpeq_epi8(c, vPlus);
+                __m256i m_slash = _mm256_cmpeq_epi8(c, vSlash);
+                __m256i valid = _mm256_or_si256(
+                    _mm256_or_si256(m_upper, _mm256_or_si256(m_lower, m_digit)),
+                    _mm256_or_si256(m_plus, m_slash));
+                if (_mm256_movemask_epi8(valid) != -1) return false;
+                i += 32;
+            }
+        }
+
+        const char cp = c62(mode_);
+        const char cs = c63(mode_);
+        for (; i < data_len; ++i) {
+            const unsigned char ch = src[i];
+            const bool ok =
+                (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                (ch >= '0' && ch <= '9') ||
+                ch == (unsigned char)cp || ch == (unsigned char)cs;
+            if (!ok) return false;
+        }
+        return true;
+    }
+
+    constexpr std::string decode(std::string_view input) const {
+        const std::size_t n = input.size();
+        if (n == 0) return {};
+
+        // ---- 校验（失败直接抛）----
+        check_or_throw(input);
+
+        // ---- 计算输出长度 ----
+        int pad = 0;
+        if (input[n - 1] == '=') {
+            ++pad;
+            if (n >= 2 && input[n - 2] == '=') ++pad;
+        }
+        const std::size_t out_len = n / 4 * 3 - (std::size_t)pad;
+
+        std::string out(out_len + 8, '\0');
+        const std::uint8_t* __restrict src = (const std::uint8_t*)input.data();
+        std::uint8_t* __restrict dst       = (std::uint8_t*)out.data();
+
+        const char cp = c62(mode_);
+        const char cs = c63(mode_);
+
+        const __m256i vA   = _mm256_set1_epi8('A');
         const __m256i va_1 = _mm256_set1_epi8('a' - 1);
         const __m256i vz_1 = _mm256_set1_epi8('z' + 1);
         const __m256i v0_1 = _mm256_set1_epi8('0' - 1);
         const __m256i v9_1 = _mm256_set1_epi8('9' + 1);
-        const __m256i vPlus  = _mm256_set1_epi8('+');
-        const __m256i vSlash = _mm256_set1_epi8('/');
+        const __m256i vPlus  = _mm256_set1_epi8(cp);
+        const __m256i vSlash = _mm256_set1_epi8(cs);
+        const __m256i v6  = _mm256_set1_epi8(6);
+        const __m256i v69 = _mm256_set1_epi8(69);
+        const __m256i vFixPlus  = _mm256_set1_epi8((char)(127 - (int)(unsigned char)cp));
+        const __m256i vFixSlash = _mm256_set1_epi8((char)(128 - (int)(unsigned char)cs));
+        const __m256i v3F = _mm256_set1_epi32(0x3F);
+        const __m256i shuf = _mm256_setr_epi8(
+            2,1,0, 6,5,4, 10,9,8, 14,13,12, 0,0,0,0,
+            2,1,0, 6,5,4, 10,9,8, 14,13,12, 0,0,0,0);
 
-        while (i + 32 <= data_len) {
-            __m256i c = _mm256_loadu_si256((const __m256i*)(src + i));
+        std::size_t pos = 0, dpos = 0;
 
-            __m256i m_upper = _mm256_and_si256(
-                _mm256_cmpgt_epi8(c, vA_1), _mm256_cmpgt_epi8(vZ_1, c));
-            __m256i m_lower = _mm256_and_si256(
-                _mm256_cmpgt_epi8(c, va_1), _mm256_cmpgt_epi8(vz_1, c));
-            __m256i m_digit = _mm256_and_si256(
-                _mm256_cmpgt_epi8(c, v0_1), _mm256_cmpgt_epi8(v9_1, c));
-            __m256i m_plus  = _mm256_cmpeq_epi8(c, vPlus);
-            __m256i m_slash = _mm256_cmpeq_epi8(c, vSlash);
+        while (pos + 32 <= n) {
+            _mm_prefetch((const char*)(src + pos + 512), _MM_HINT_T0);
+            __m256i c = _mm256_loadu_si256((const __m256i*)(src + pos));
 
-            __m256i valid = _mm256_or_si256(
-                _mm256_or_si256(m_upper, _mm256_or_si256(m_lower, m_digit)),
-                _mm256_or_si256(m_plus, m_slash));
+            __m256i v = _mm256_sub_epi8(c, vA);
+            v = _mm256_sub_epi8(v, _mm256_and_si256(
+                _mm256_and_si256(_mm256_cmpgt_epi8(c, va_1),
+                                 _mm256_cmpgt_epi8(vz_1, c)), v6));
+            v = _mm256_add_epi8(v, _mm256_and_si256(
+                _mm256_and_si256(_mm256_cmpgt_epi8(c, v0_1),
+                                 _mm256_cmpgt_epi8(v9_1, c)), v69));
+            v = _mm256_add_epi8(v, _mm256_and_si256(
+                _mm256_cmpeq_epi8(c, vPlus), vFixPlus));
+            v = _mm256_add_epi8(v, _mm256_and_si256(
+                _mm256_cmpeq_epi8(c, vSlash), vFixSlash));
 
-            if (_mm256_movemask_epi8(valid) != -1) return false;
-            i += 32;
+            __m256i c0 = _mm256_and_si256(v, v3F);
+            __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(v,  8), v3F);
+            __m256i c2 = _mm256_and_si256(_mm256_srli_epi32(v, 16), v3F);
+            __m256i c3 = _mm256_and_si256(_mm256_srli_epi32(v, 24), v3F);
+            __m256i m  = _mm256_or_si256(
+                _mm256_or_si256(_mm256_slli_epi32(c0, 18), _mm256_slli_epi32(c1, 12)),
+                _mm256_or_si256(_mm256_slli_epi32(c2,  6), c3));
+            __m256i packed = _mm256_shuffle_epi8(m, shuf);
+
+            _mm_storeu_si128((__m128i*)(dst + dpos),
+                             _mm256_castsi256_si128(packed));
+            _mm_storeu_si128((__m128i*)(dst + dpos + 12),
+                             _mm256_extracti128_si256(packed, 1));
+            pos  += 32;
+            dpos += 24;
+        }
+
+        while (pos < n) {
+            std::uint32_t quad = 0;
+            int v = 0;
+            for (int j = 0; j < 4; ++j) {
+                const unsigned char ch = src[pos + j];
+                if (ch == '=') continue;
+                quad = (quad << 6) | (std::uint32_t)decode_char(ch);
+                ++v;
+            }
+            quad <<= (4 - v) * 6;
+            if (v >= 2) dst[dpos++] = (char)((quad >> 16) & 0xFF);
+            if (v >= 3) dst[dpos++] = (char)((quad >>  8) & 0xFF);
+            if (v >= 4) dst[dpos++] = (char)( quad        & 0xFF);
+            pos += 4;
+        }
+
+        out.resize(out_len);
+        return out;
+    }
+
+private:
+    // ---- 校验，失败抛 DecodeError ----
+    constexpr void check_or_throw(std::string_view input) const {
+        const std::size_t n = input.size();
+        if (n == 0) return;
+
+        if (n % 4 != 0) {
+            throw DecodeError(
+                "base64: length not a multiple of 4 (got " + std::to_string(n) + ")",
+                n);
+        }
+
+        int pad = 0;
+        if (input[n - 1] == '=') {
+            pad = 1;
+            if (n >= 2 && input[n - 2] == '=') {
+                pad = 2;
+                if (n >= 3 && input[n - 3] == '=') {
+                    throw DecodeError(
+                        "base64: invalid padding at position " + std::to_string(n - 3),
+                        n - 3);
+                }
+            }
+        }
+        const std::size_t data_len = n - (std::size_t)pad;
+
+        for (std::size_t i = 0; i < data_len; ++i) {
+            if (input[i] == '=') {
+                throw DecodeError(
+                    "base64: invalid padding at position " + std::to_string(i),
+                    i);
+            }
+        }
+
+        const std::uint8_t* src = (const std::uint8_t*)input.data();
+        std::size_t i = 0;
+        if (data_len >= 32) {
+            const __m256i vA_1 = _mm256_set1_epi8('A' - 1);
+            const __m256i vZ_1 = _mm256_set1_epi8('Z' + 1);
+            const __m256i va_1 = _mm256_set1_epi8('a' - 1);
+            const __m256i vz_1 = _mm256_set1_epi8('z' + 1);
+            const __m256i v0_1 = _mm256_set1_epi8('0' - 1);
+            const __m256i v9_1 = _mm256_set1_epi8('9' + 1);
+            const __m256i vPlus  = _mm256_set1_epi8(c62(mode_));
+            const __m256i vSlash = _mm256_set1_epi8(c63(mode_));
+
+            while (i + 32 <= data_len) {
+                __m256i c = _mm256_loadu_si256((const __m256i*)(src + i));
+                __m256i m_upper = _mm256_and_si256(
+                    _mm256_cmpgt_epi8(c, vA_1), _mm256_cmpgt_epi8(vZ_1, c));
+                __m256i m_lower = _mm256_and_si256(
+                    _mm256_cmpgt_epi8(c, va_1), _mm256_cmpgt_epi8(vz_1, c));
+                __m256i m_digit = _mm256_and_si256(
+                    _mm256_cmpgt_epi8(c, v0_1), _mm256_cmpgt_epi8(v9_1, c));
+                __m256i m_plus  = _mm256_cmpeq_epi8(c, vPlus);
+                __m256i m_slash = _mm256_cmpeq_epi8(c, vSlash);
+                __m256i valid = _mm256_or_si256(
+                    _mm256_or_si256(m_upper, _mm256_or_si256(m_lower, m_digit)),
+                    _mm256_or_si256(m_plus, m_slash));
+                if (_mm256_movemask_epi8(valid) != -1) break;
+                i += 32;
+            }
+        }
+
+        const char cp = c62(mode_);
+        const char cs = c63(mode_);
+        for (; i < data_len; ++i) {
+            const unsigned char ch = src[i];
+            const bool ok =
+                (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                (ch >= '0' && ch <= '9') ||
+                ch == (unsigned char)cp || ch == (unsigned char)cs;
+            if (!ok) {
+                throw DecodeError(
+                    "base64: invalid character '" + char_repr((char)ch)
+                        + "' at position " + std::to_string(i),
+                    i);
+            }
         }
     }
 
-    for (; i < data_len; ++i) {
-        const unsigned char c = src[i];
-        const bool ok =
-            (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-            (c >= '0' && c <= '9') || c == '+' || c == '/';
-        if (!ok) return false;
+    static std::string char_repr(char c) {
+        unsigned char uc = (unsigned char)c;
+        if (uc >= 0x20 && uc < 0x7f && uc != '\\') return std::string(1, c);
+        static const char* hex = "0123456789abcdef";
+        std::string r = "\\x";
+        r += hex[uc >> 4];
+        r += hex[uc & 0xF];
+        return r;
     }
 
-    return true;
-}
+    static constexpr const char* kStdChars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    static constexpr const char* kUrlChars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-constexpr inline std::string encode(std::string_view input) {
-    const std::size_t n = input.size();
-    if (n == 0) return {};
+    static constexpr char c62(Mode m) noexcept { return m == Mode::Standard ? '+' : '-'; }
+    static constexpr char c63(Mode m) noexcept { return m == Mode::Standard ? '/' : '_'; }
 
-    std::string out((n + 2) / 3 * 4, '\0');
-    const std::uint8_t* __restrict src = (const std::uint8_t*)input.data();
-    std::uint8_t* __restrict dst       = (std::uint8_t*)out.data();
+    constexpr int decode_char(unsigned char c) const noexcept {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (mode_ == Mode::Standard) {
+            if (c == '+') return 62;
+            if (c == '/') return 63;
+        } else {
+            if (c == '-') return 62;
+            if (c == '_') return 63;
+        }
+        return 0;
+    }
 
-    const __m256i m24  = _mm256_set_epi32(0, 0, -1, -1, -1, -1, -1, -1);
-    const __m256i perm = _mm256_set_epi32(6, 5, 4, 3, 3, 2, 1, 0);
-    const __m256i shuf = _mm256_setr_epi8(
-        2,1,0,(char)0x80, 5,4,3,(char)0x80,
-        8,7,6,(char)0x80, 11,10,9,(char)0x80,
-        2,1,0,(char)0x80, 5,4,3,(char)0x80,
-        8,7,6,(char)0x80, 11,10,9,(char)0x80);
-    const __m256i vA  = _mm256_set1_epi8('A');
-    const __m256i v25 = _mm256_set1_epi8(25);
-    const __m256i v51 = _mm256_set1_epi8(51);
-    const __m256i v62 = _mm256_set1_epi8(62);
-    const __m256i v63 = _mm256_set1_epi8(63);
-    const __m256i v6  = _mm256_set1_epi8(6);
-    const __m256i v75 = _mm256_set1_epi8(75);
-    const __m256i v15 = _mm256_set1_epi8(15);
-    const __m256i v12 = _mm256_set1_epi8(12);
-    const __m256i v3F = _mm256_set1_epi32(0x3F);
+    static BASE64_AVX2_FORCE_INLINE
+    constexpr void encode_block(const std::uint8_t* __restrict s,
+                      std::uint8_t* __restrict d,
+                      int fix62, int fix63)
+    {
+        const __m256i m24  = _mm256_set_epi32(0, 0, -1, -1, -1, -1, -1, -1);
+        const __m256i perm = _mm256_set_epi32(6, 5, 4, 3, 3, 2, 1, 0);
+        const __m256i shuf = _mm256_setr_epi8(
+            2,1,0,(char)0x80, 5,4,3,(char)0x80,
+            8,7,6,(char)0x80, 11,10,9,(char)0x80,
+            2,1,0,(char)0x80, 5,4,3,(char)0x80,
+            8,7,6,(char)0x80, 11,10,9,(char)0x80);
+        const __m256i vA  = _mm256_set1_epi8('A');
+        const __m256i v25 = _mm256_set1_epi8(25);
+        const __m256i v51 = _mm256_set1_epi8(51);
+        const __m256i v62 = _mm256_set1_epi8(62);
+        const __m256i v63 = _mm256_set1_epi8(63);
+        const __m256i v6  = _mm256_set1_epi8(6);
+        const __m256i v75 = _mm256_set1_epi8(75);
+        const __m256i vfix62 = _mm256_set1_epi8((char)fix62);
+        const __m256i vfix63 = _mm256_set1_epi8((char)fix63);
+        const __m256i v3F = _mm256_set1_epi32(0x3F);
 
-    auto enc_block = [&](const std::uint8_t* s, std::uint8_t* d) {
         __m256i v = _mm256_maskload_epi32((const int*)s, m24);
         __m256i w = _mm256_permutevar8x32_epi32(v, perm);
         __m256i sh = _mm256_shuffle_epi8(w, shuf);
@@ -149,155 +417,14 @@ constexpr inline std::string encode(std::string_view input) {
         __m256i m52 = _mm256_cmpgt_epi8(r, v51);
         ch = _mm256_sub_epi8(ch, _mm256_and_si256(m52, v75));
         __m256i m62 = _mm256_cmpeq_epi8(r, v62);
-        ch = _mm256_sub_epi8(ch, _mm256_and_si256(m62, v15));
+        ch = _mm256_add_epi8(ch, _mm256_and_si256(m62, vfix62));
         __m256i m63 = _mm256_cmpeq_epi8(r, v63);
-        ch = _mm256_sub_epi8(ch, _mm256_and_si256(m63, v12));
+        ch = _mm256_add_epi8(ch, _mm256_and_si256(m63, vfix63));
 
         _mm256_storeu_si256((__m256i*)d, ch);
-    };
-
-    std::size_t pos = 0, dpos = 0;
-
-    if (n >= 24) {
-        while (pos + 48 <= n) {
-            _mm_prefetch((const char*)(src + pos + 512), _MM_HINT_T0);
-            enc_block(src + pos,      dst + dpos);
-            enc_block(src + pos + 24, dst + dpos + 32);
-            pos += 48; dpos += 64;
-        }
-        while (pos + 24 <= n) {
-            enc_block(src + pos, dst + dpos);
-            pos += 24; dpos += 32;
-        }
-
-        const std::size_t rem = n - pos;
-        if (rem > 0) {
-            alignas(32) std::uint8_t tmp[24] = {};
-            std::memcpy(tmp, src + pos, rem);
-            alignas(32) std::uint8_t tmp_out[32];
-            enc_block(tmp, tmp_out);
-            const std::size_t out_len = (rem + 2) / 3 * 4;
-            if (rem % 3 == 1) {
-                tmp_out[out_len - 2] = '=';
-                tmp_out[out_len - 1] = '=';
-            } else if (rem % 3 == 2) {
-                tmp_out[out_len - 1] = '=';
-            }
-            std::memcpy(dst + dpos, tmp_out, out_len);
-        }
-    } else {
-        while (pos < n) {
-            const std::size_t rem = n - pos;
-            std::uint32_t t = 0;
-            if (rem >= 1) t |= (std::uint32_t)src[pos]     << 16;
-            if (rem >= 2) t |= (std::uint32_t)src[pos + 1] <<  8;
-            if (rem >= 3) t |= (std::uint32_t)src[pos + 2];
-
-            dst[dpos + 0] = detail::enc_table[(t >> 18) & 0x3F];
-            dst[dpos + 1] = detail::enc_table[(t >> 12) & 0x3F];
-            dst[dpos + 2] = (rem >= 2) ? detail::enc_table[(t >> 6) & 0x3F] : '=';
-            dst[dpos + 3] = (rem >= 3) ? detail::enc_table[t & 0x3F]        : '=';
-            dpos += 4;
-            pos  += (rem >= 3) ? 3 : rem;
-        }
-    }
-    return out;
-}
-
-constexpr inline std::string decode(std::string_view input) {
-    const std::size_t n = input.size();
-    if (n == 0) {
-        return {};
     }
 
-    int pad = 0;
-    if (input[n - 1] == '=') {
-        ++pad;
-        if (n >= 2 && input[n - 2] == '=') ++pad;
-    }
-    const std::size_t out_len = n / 4 * 3 - (std::size_t)pad;
-
-    std::string out(out_len + 8, '\0');
-    const std::uint8_t* __restrict src = (const std::uint8_t*)input.data();
-    std::uint8_t* __restrict dst       = (std::uint8_t*)out.data();
-
-    const __m256i vA   = _mm256_set1_epi8('A');
-    const __m256i va_1 = _mm256_set1_epi8('a' - 1);
-    const __m256i vz_1 = _mm256_set1_epi8('z' + 1);
-    const __m256i v0_1 = _mm256_set1_epi8('0' - 1);
-    const __m256i v9_1 = _mm256_set1_epi8('9' + 1);
-    const __m256i vPlus  = _mm256_set1_epi8('+');
-    const __m256i vSlash = _mm256_set1_epi8('/');
-    const __m256i v6  = _mm256_set1_epi8(6);
-    const __m256i v69 = _mm256_set1_epi8(69);
-    const __m256i v84 = _mm256_set1_epi8(84);
-    const __m256i v81 = _mm256_set1_epi8(81);
-    const __m256i v3F = _mm256_set1_epi32(0x3F);
-    const __m256i shuf = _mm256_setr_epi8(
-        2,1,0, 6,5,4, 10,9,8, 14,13,12, 0,0,0,0,
-        2,1,0, 6,5,4, 10,9,8, 14,13,12, 0,0,0,0);
-
-    std::size_t pos = 0, dpos = 0;
-
-    while (pos + 32 <= n) {
-        _mm_prefetch((const char*)(src + pos + 512), _MM_HINT_T0);
-
-        __m256i c = _mm256_loadu_si256((const __m256i*)(src + pos));
-
-        __m256i v = _mm256_sub_epi8(c, vA);
-        v = _mm256_sub_epi8(v, _mm256_and_si256(
-            _mm256_and_si256(_mm256_cmpgt_epi8(c, va_1),
-                             _mm256_cmpgt_epi8(vz_1, c)), v6));
-        v = _mm256_add_epi8(v, _mm256_and_si256(
-            _mm256_and_si256(_mm256_cmpgt_epi8(c, v0_1),
-                             _mm256_cmpgt_epi8(v9_1, c)), v69));
-        v = _mm256_add_epi8(v, _mm256_and_si256(
-            _mm256_cmpeq_epi8(c, vPlus), v84));
-        v = _mm256_add_epi8(v, _mm256_and_si256(
-            _mm256_cmpeq_epi8(c, vSlash), v81));
-
-        __m256i c0 = _mm256_and_si256(v, v3F);
-        __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(v,  8), v3F);
-        __m256i c2 = _mm256_and_si256(_mm256_srli_epi32(v, 16), v3F);
-        __m256i c3 = _mm256_and_si256(_mm256_srli_epi32(v, 24), v3F);
-        __m256i m  = _mm256_or_si256(
-            _mm256_or_si256(_mm256_slli_epi32(c0, 18), _mm256_slli_epi32(c1, 12)),
-            _mm256_or_si256(_mm256_slli_epi32(c2,  6), c3));
-        __m256i packed = _mm256_shuffle_epi8(m, shuf);
-
-        _mm_storeu_si128((__m128i*)(dst + dpos),
-                         _mm256_castsi256_si128(packed));
-        _mm_storeu_si128((__m128i*)(dst + dpos + 12),
-                         _mm256_extracti128_si256(packed, 1));
-
-        pos  += 32;
-        dpos += 24;
-    }
-
-    while (pos < n) {
-        std::uint32_t quad = 0;
-        int valid = 0;
-        for (int j = 0; j < 4; ++j) {
-            const unsigned char ch = src[pos + j];
-            if (ch == '=') continue;
-            quad = (quad << 6) | (std::uint32_t)detail::decode_char(ch);
-            ++valid;
-        }
-        quad <<= (4 - valid) * 6;
-        if (valid >= 2) dst[dpos++] = (char)((quad >> 16) & 0xFF);
-        if (valid >= 3) dst[dpos++] = (char)((quad >>  8) & 0xFF);
-        if (valid >= 4) dst[dpos++] = (char)( quad        & 0xFF);
-        pos += 4;
-    }
-
-    out.resize(out_len);
-    return out;
-}
-
-constexpr inline std::string decode_checked(std::string_view input) {
-    if (!validate(input))
-        throw std::invalid_argument("base64: invalid input");
-    return decode(input);
-}
+    Mode mode_ = Mode::Standard;
+};
 
 } // namespace base64_avx2
