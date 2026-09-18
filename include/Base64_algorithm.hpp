@@ -46,7 +46,7 @@ public:
     void set(Mode m) noexcept { mode_ = m; }
     Mode mode() const noexcept { return mode_; }
 
-    constexpr std::string encode(std::string_view input) {
+    constexpr std::string encode(std::string_view input) const {
         const std::size_t n = input.size();
         if (n == 0) return {};
 
@@ -55,21 +55,69 @@ public:
         std::uint8_t* __restrict dst       = (std::uint8_t*)out.data();
 
         const char* table = (mode_ == Mode::Standard) ? kStdChars : kUrlChars;
-        const int fix62 = (int)(unsigned char)c62(mode_) - 58;
-        const int fix63 = (int)(unsigned char)c63(mode_) - 59;
 
         std::size_t pos = 0, dpos = 0;
 
         if (n >= 24) {
+            const __m256i m24  = _mm256_set_epi32(0, 0, -1, -1, -1, -1, -1, -1);
+            const __m256i perm = _mm256_set_epi32(6, 5, 4, 3, 3, 2, 1, 0);
+            const __m256i shuf = _mm256_setr_epi8(
+                2,1,0,(char)0x80, 5,4,3,(char)0x80,
+                8,7,6,(char)0x80, 11,10,9,(char)0x80,
+                2,1,0,(char)0x80, 5,4,3,(char)0x80,
+                8,7,6,(char)0x80, 11,10,9,(char)0x80);
+            const __m256i v3F = _mm256_set1_epi32(0x3F);
+
+            const __m256i v51 = _mm256_set1_epi8(51);
+            const __m256i v26 = _mm256_set1_epi8(26);
+            const __m256i v13 = _mm256_set1_epi8(13);
+            const int off62 = (int)(unsigned char)c62(mode_) - 62;
+            const int off63 = (int)(unsigned char)c63(mode_) - 63;
+            // 偏移表（按 6-bit 值的简化值索引）：
+            //   简化值 0  → +71  输入 26..51 → 'a'..'z'
+            //   简化值 1..10 → -4  输入 52..61 → '0'..'9'
+            //   简化值 11 → off62  输入 62 → '+' 或 '-'
+            //   简化值 12 → off63  输入 63 → '/' 或 '_'
+            //   简化值 13 → +65  输入 0..25 → 'A'..'Z'
+            const __m256i offsets = _mm256_setr_epi8(
+                71, -4, -4, -4, -4, -4, -4, -4,
+                -4, -4, -4, (char)off62, (char)off63, 65, 0, 0,
+                71, -4, -4, -4, -4, -4, -4, -4,
+                -4, -4, -4, (char)off62, (char)off63, 65, 0, 0);
+
+            auto encode_block = [&](const std::uint8_t* s, std::uint8_t* d) {
+                __m256i v = _mm256_maskload_epi32((const int*)s, m24);
+                __m256i w = _mm256_permutevar8x32_epi32(v, perm);
+                __m256i sh = _mm256_shuffle_epi8(w, shuf);
+
+                __m256i c3 = _mm256_and_si256(sh, v3F);
+                __m256i c2 = _mm256_and_si256(_mm256_srli_epi32(sh,  6), v3F);
+                __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(sh, 12), v3F);
+                __m256i c0 = _mm256_srli_epi32(sh, 18);
+
+                __m256i r = _mm256_or_si256(
+                    _mm256_or_si256(_mm256_slli_epi32(c3, 24), _mm256_slli_epi32(c2, 16)),
+                    _mm256_or_si256(_mm256_slli_epi32(c1,  8), c0));
+
+                __m256i result = _mm256_subs_epu8(r, v51);          // r<51 → 0
+                __m256i less = _mm256_cmpgt_epi8(v26, r);           // r<26 → 0xFF
+                result = _mm256_or_si256(result,
+                          _mm256_and_si256(less, v13));             // r<26 → 13
+                result = _mm256_shuffle_epi8(offsets, result);
+                __m256i ch = _mm256_add_epi8(result, r);
+
+                _mm256_storeu_si256((__m256i*)d, ch);
+            };
+
             while (pos + 48 <= n) {
                 _mm_prefetch((const char*)(src + pos + 512), _MM_HINT_T0);
-                encode_block(src + pos,      dst + dpos,      fix62, fix63);
-                encode_block(src + pos + 24, dst + dpos + 32, fix62, fix63);
+                encode_block(src + pos,      dst + dpos);
+                encode_block(src + pos + 24, dst + dpos + 32);
                 pos  += 48;
                 dpos += 64;
             }
             while (pos + 24 <= n) {
-                encode_block(src + pos, dst + dpos, fix62, fix63);
+                encode_block(src + pos, dst + dpos);
                 pos  += 24;
                 dpos += 32;
             }
@@ -78,7 +126,7 @@ public:
                 alignas(32) std::uint8_t tmp[24] = {};
                 std::memcpy(tmp, src + pos, rem);
                 alignas(32) std::uint8_t tmp_out[32];
-                encode_block(tmp, tmp_out, fix62, fix63);
+                encode_block(tmp, tmp_out);
                 const std::size_t tail_len = (rem + 2) / 3 * 4;
                 if (rem % 3 == 1) {
                     tmp_out[tail_len - 2] = '=';
@@ -106,8 +154,7 @@ public:
         return out;
     }
 
-    // ---- 校验（不抛异常）----
-    constexpr bool validate(std::string_view input) noexcept {
+    constexpr bool validate(std::string_view input) const noexcept {
         const std::size_t n = input.size();
         if (n == 0) return true;
         if (n % 4 != 0) return false;
@@ -169,11 +216,11 @@ public:
         return true;
     }
 
-    constexpr std::string decode(std::string_view input) {
+    constexpr std::string decode(std::string_view input) const {
         const std::size_t n = input.size();
         if (n == 0) return {};
 
-        // ---- 校验（失败直接抛）----
+        // ---- 校验 ----
         check_or_throw(input);
 
         // ---- 计算输出长度 ----
@@ -202,10 +249,13 @@ public:
         const __m256i v69 = _mm256_set1_epi8(69);
         const __m256i vFixPlus  = _mm256_set1_epi8((char)(127 - (int)(unsigned char)cp));
         const __m256i vFixSlash = _mm256_set1_epi8((char)(128 - (int)(unsigned char)cs));
-        const __m256i v3F = _mm256_set1_epi32(0x3F);
-        const __m256i shuf = _mm256_setr_epi8(
-            2,1,0, 6,5,4, 10,9,8, 14,13,12, 0,0,0,0,
-            2,1,0, 6,5,4, 10,9,8, 14,13,12, 0,0,0,0);
+
+        const __m256i madd1 = _mm256_set1_epi32(0x01400140);
+        const __m256i madd2 = _mm256_set1_epi32(0x00011000);
+        const __m256i pack_shuf = _mm256_setr_epi8(
+            2,1,0, 6,5,4, 10,9,8, 14,13,12, -1,-1,-1,-1,
+            2,1,0, 6,5,4, 10,9,8, 14,13,12, -1,-1,-1,-1);
+        const __m256i pack_perm = _mm256_setr_epi32(0, 1, 2, 4, 5, 6, -1, -1);
 
         std::size_t pos = 0, dpos = 0;
 
@@ -225,23 +275,17 @@ public:
             v = _mm256_add_epi8(v, _mm256_and_si256(
                 _mm256_cmpeq_epi8(c, vSlash), vFixSlash));
 
-            __m256i c0 = _mm256_and_si256(v, v3F);
-            __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(v,  8), v3F);
-            __m256i c2 = _mm256_and_si256(_mm256_srli_epi32(v, 16), v3F);
-            __m256i c3 = _mm256_and_si256(_mm256_srli_epi32(v, 24), v3F);
-            __m256i m  = _mm256_or_si256(
-                _mm256_or_si256(_mm256_slli_epi32(c0, 18), _mm256_slli_epi32(c1, 12)),
-                _mm256_or_si256(_mm256_slli_epi32(c2,  6), c3));
-            __m256i packed = _mm256_shuffle_epi8(m, shuf);
+            __m256i merged = _mm256_maddubs_epi16(v, madd1);
+            __m256i packed = _mm256_madd_epi16(merged, madd2);
+            packed = _mm256_shuffle_epi8(packed, pack_shuf);
+            packed = _mm256_permutevar8x32_epi32(packed, pack_perm);
 
-            _mm_storeu_si128((__m128i*)(dst + dpos),
-                             _mm256_castsi256_si128(packed));
-            _mm_storeu_si128((__m128i*)(dst + dpos + 12),
-                             _mm256_extracti128_si256(packed, 1));
+            _mm256_storeu_si256((__m256i*)(dst + dpos), packed);
             pos  += 32;
             dpos += 24;
         }
 
+        // 标量尾部
         while (pos < n) {
             std::uint32_t quad = 0;
             int v = 0;
@@ -263,8 +307,8 @@ public:
     }
 
 private:
-    // ---- 校验，失败抛 DecodeError ----
-    constexpr void check_or_throw(std::string_view input) {
+
+    void constexpr check_or_throw(std::string_view input) const {
         const std::size_t n = input.size();
         if (n == 0) return;
 
@@ -373,55 +417,6 @@ private:
             if (c == '_') return 63;
         }
         return 0;
-    }
-
-    static BASE64_AVX2_FORCE_INLINE
-    constexpr void encode_block(const std::uint8_t* __restrict s,
-                      std::uint8_t* __restrict d,
-                      int fix62, int fix63)
-    {
-        const __m256i m24  = _mm256_set_epi32(0, 0, -1, -1, -1, -1, -1, -1);
-        const __m256i perm = _mm256_set_epi32(6, 5, 4, 3, 3, 2, 1, 0);
-        const __m256i shuf = _mm256_setr_epi8(
-            2,1,0,(char)0x80, 5,4,3,(char)0x80,
-            8,7,6,(char)0x80, 11,10,9,(char)0x80,
-            2,1,0,(char)0x80, 5,4,3,(char)0x80,
-            8,7,6,(char)0x80, 11,10,9,(char)0x80);
-        const __m256i vA  = _mm256_set1_epi8('A');
-        const __m256i v25 = _mm256_set1_epi8(25);
-        const __m256i v51 = _mm256_set1_epi8(51);
-        const __m256i v62 = _mm256_set1_epi8(62);
-        const __m256i v63 = _mm256_set1_epi8(63);
-        const __m256i v6  = _mm256_set1_epi8(6);
-        const __m256i v75 = _mm256_set1_epi8(75);
-        const __m256i vfix62 = _mm256_set1_epi8((char)fix62);
-        const __m256i vfix63 = _mm256_set1_epi8((char)fix63);
-        const __m256i v3F = _mm256_set1_epi32(0x3F);
-
-        __m256i v = _mm256_maskload_epi32((const int*)s, m24);
-        __m256i w = _mm256_permutevar8x32_epi32(v, perm);
-        __m256i sh = _mm256_shuffle_epi8(w, shuf);
-
-        __m256i c3 = _mm256_and_si256(sh, v3F);
-        __m256i c2 = _mm256_and_si256(_mm256_srli_epi32(sh,  6), v3F);
-        __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(sh, 12), v3F);
-        __m256i c0 = _mm256_srli_epi32(sh, 18);
-
-        __m256i r = _mm256_or_si256(
-            _mm256_or_si256(_mm256_slli_epi32(c3, 24), _mm256_slli_epi32(c2, 16)),
-            _mm256_or_si256(_mm256_slli_epi32(c1,  8), c0));
-
-        __m256i ch  = _mm256_add_epi8(r, vA);
-        __m256i m26 = _mm256_cmpgt_epi8(r, v25);
-        ch = _mm256_add_epi8(ch, _mm256_and_si256(m26, v6));
-        __m256i m52 = _mm256_cmpgt_epi8(r, v51);
-        ch = _mm256_sub_epi8(ch, _mm256_and_si256(m52, v75));
-        __m256i m62 = _mm256_cmpeq_epi8(r, v62);
-        ch = _mm256_add_epi8(ch, _mm256_and_si256(m62, vfix62));
-        __m256i m63 = _mm256_cmpeq_epi8(r, v63);
-        ch = _mm256_add_epi8(ch, _mm256_and_si256(m63, vfix63));
-
-        _mm256_storeu_si256((__m256i*)d, ch);
     }
 
     Mode mode_ = Mode::Standard;
